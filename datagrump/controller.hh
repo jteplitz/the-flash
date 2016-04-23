@@ -13,9 +13,12 @@ private:
   uint64_t prev_rtt;
   double rtt_diff;
   uint64_t min_rtt;
+  uint64_t prev_arrival;
+  uint64_t prev_receive;
   int increase_counter;
-  void _additiveIncrease( void );
+  void _additiveIncrease( double gradient, uint64_t rtt );
   void _multiplicativeDecrease( double gradient );
+  double _gradient( const uint64_t curr, uint64_t &prev, double &diff, uint64_t min, uint64_t delta_x);
 
   /* Add member variables here */
 
