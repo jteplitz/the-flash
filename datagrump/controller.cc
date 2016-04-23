@@ -7,11 +7,11 @@
 #define INITIAL_WINDOW_SIZE 1
 #define MULTIPLICATIVE_DECREASE_FACTOR 2
 #define CONSEQUETIVE_INCREASES 5
-#define TIMEOUT_VAL 200
+#define TIMEOUT_VAL 500
 #define RTT_THRESH 100
-#define RTT_LOW_THRESH 40
+#define RTT_LOW_THRESH 60
 #define RTT_HIGH_THRESH 200
-#define ALPHA 0.2
+#define ALPHA 1.0
 #define BETA 0.5
 
 using namespace std;
@@ -80,10 +80,10 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
     min_rtt = rtt;
   }
 
-  if (rtt > RTT_HIGH_THRESH) {
-    this->curr_window_size = 1.0;
+  /*if (rtt > RTT_HIGH_THRESH) {
+    this->curr_window_size = INITIAL_WINDOW_SIZE;
     return;
-  }
+  }*/
 
   //cout << sequence_number_acked << " " << recv_timestamp_acked - prev_arrival << " " << rtt << endl;
 
@@ -96,10 +96,14 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
   }
   auto iat = recv_timestamp_acked - prev_receive;
   prev_receive = recv_timestamp_acked;
-  if (iat < rtt) {
-    //rtt -= iat;
+  if (iat < rtt && iat > 1) {
+    rtt -= iat;
+    if (rtt < RTT_LOW_THRESH) {
+      _additiveIncrease(0, 0);
+      return;
+    }
   } else {
-    //return;
+    return;
   }
   
   //auto iat = recv_timestamp_acked - prev_arrival;
@@ -135,12 +139,13 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
     return;
   }
   auto normalized_gradient = _gradient(rtt, prev_rtt, rtt_diff, min_rtt, delta_x);
+  cout << timestamp_ack_received - start_time << ',' << normalized_gradient << endl;
 
   //if (iat_gradient != 0) {
     //cout << timestamp_ack_received - start_time << ", " << iat_gradient << ", " << normalized_gradient * min_rtt << endl;
 
     //normalized_gradient -= iat_gradient;
-    if (normalized_gradient <= 0) {
+    if (normalized_gradient <= 0.1) {
       increase_counter++;
       _additiveIncrease(normalized_gradient, rtt);
     } else {
@@ -164,8 +169,9 @@ double Controller::_gradient( const uint64_t curr, uint64_t &prev, double &diff,
   double new_diff = ((double) curr - (double) prev) / delta;
   prev = curr;
   diff = (1.0 - ALPHA) * diff + ALPHA * new_diff;
-  cout << delta << ", " << new_diff << ", " << diff << endl;
-  return diff / min;
+  min--;
+  return diff;
+  //return diff / min;
 }
 
 void Controller::_multiplicativeDecrease( double gradient )
@@ -173,9 +179,9 @@ void Controller::_multiplicativeDecrease( double gradient )
   if (debug_) {
     cout << "decreasing window from " << this->curr_window_size << endl;
   }
+  //this->curr_window_size = this->curr_window_size * (1.0 - BETA * gradient);
+  this->curr_window_size -= 2.0 / this->window_size();
   gradient++;
-  //curr_window_size /= 2;
-  this->curr_window_size = this->curr_window_size * (1.0 - BETA * gradient);
 }
 
 void Controller::_additiveIncrease( double gradient, uint64_t rtt )
@@ -186,7 +192,7 @@ void Controller::_additiveIncrease( double gradient, uint64_t rtt )
   gradient++;
   rtt++;
   if (increase_counter != CONSEQUETIVE_INCREASES) {
-    this->curr_window_size += 5.0 / this->window_size();
+    this->curr_window_size += 2.0 / this->window_size();
   } else {
     increase_counter = 0;
     this->curr_window_size += 5.0 / this->window_size();
