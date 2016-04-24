@@ -36,6 +36,9 @@ public:
   /* How long to wait (in milliseconds) if there are no acks
      before sending one more datagram */
   unsigned int timeout_ms( void );
+
+  /* Returns the desired send rate in bits/s */
+  unsigned int send_rate( void );
 };
 
 #endif

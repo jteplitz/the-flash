@@ -2,11 +2,16 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <cmath>
 
 #include "socket.hh"
 #include "contest_message.hh"
 #include "controller.hh"
+#include "timestamp.hh"
 #include "poller.hh"
+
+// packet size in bits
+#define PACKET_SIZE 12000
 
 using namespace std;
 using namespace PollerShortNames;
@@ -24,6 +29,8 @@ private:
      this is the sequence number that the sender
      next expects will be acknowledged by the receiver */
   uint64_t next_ack_expected_;
+  uint64_t old_timestamp_;
+  uint64_t pending_bits_;
 
   void send_datagram( void );
   void got_ack( const uint64_t timestamp, const ContestMessage & msg );
@@ -33,6 +40,7 @@ public:
   DatagrumpSender( const char * const host, const char * const port,
 		   const bool debug );
   int loop( void );
+  uint64_t get_time_diff ( void );
 };
 
 int main( int argc, char *argv[] )
@@ -64,7 +72,9 @@ DatagrumpSender::DatagrumpSender( const char * const host,
   : socket_(),
     controller_( debug ),
     sequence_number_( 0 ),
-    next_ack_expected_( 0 )
+    next_ack_expected_( 0 ),
+    old_timestamp_( timestamp_ns() ),
+    pending_bits_( 0 )
 {
   /* turn on timestamps when socket receives a datagram */
   socket_.set_timestamps();
@@ -114,6 +124,18 @@ bool DatagrumpSender::window_is_open( void )
   return sequence_number_ - next_ack_expected_ < controller_.window_size();
 }
 
+uint64_t DatagrumpSender::get_time_diff( void )
+{
+  uint64_t timestamp = timestamp_ns();
+  if (old_timestamp_ > timestamp) {
+    // TODO: Investigate why this happens
+    return 0;
+  }
+  const uint64_t diff = timestamp - old_timestamp_;
+  old_timestamp_ = timestamp;
+  return diff;
+}
+
 int DatagrumpSender::loop( void )
 {
   /* read and write from the receiver using an event-driven "poller" */
@@ -123,13 +145,18 @@ int DatagrumpSender::loop( void )
      sending more datagrams */
   poller.add_action( Action( socket_, Direction::Out, [&] () {
 	/* Close the window */
-	while ( window_is_open() ) {
-	  send_datagram();
-	}
+        uint64_t time_diff = get_time_diff();
+        double send_rate = (double) controller_.send_rate() / pow(10, 9);
+        pending_bits_ += time_diff * send_rate;
+        cout << send_rate << ", " << time_diff << "," << pending_bits_ << endl;
+        while (pending_bits_ >= PACKET_SIZE) {
+          send_datagram();
+          pending_bits_ -= PACKET_SIZE;
+        }
 	return ResultType::Continue;
       },
       /* We're only interested in this rule when the window is open */
-      [&] () { return window_is_open(); } ) );
+      [&] () { return true; } ) );
 
   /* second rule: if sender receives an ack,
      process it and inform the controller
@@ -148,7 +175,7 @@ int DatagrumpSender::loop( void )
       return ret.exit_status;
     } else if ( ret.result == PollResult::Timeout ) {
       /* After a timeout, send one datagram to try to get things moving again */
-      send_datagram();
+      //send_datagram();
     }
   }
 }

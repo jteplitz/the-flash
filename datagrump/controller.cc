@@ -65,3 +65,9 @@ unsigned int Controller::timeout_ms( void )
 {
   return 1000; /* timeout of one second */
 }
+
+unsigned int Controller::send_rate( void )
+{
+  // 1 Mb/s for now
+  return 1000000;
+}

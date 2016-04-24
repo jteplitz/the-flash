@@ -34,3 +34,13 @@ uint64_t timestamp_ms( const timespec & ts )
   const static uint64_t EPOCH = timestamp_ms_raw( current_time() );
   return timestamp_ms_raw( ts ) - EPOCH;
 }
+
+uint64_t timestamp_ns ( void ) 
+{
+  return timestamp_ns (current_time() );
+}
+
+uint64_t timestamp_ns( const timespec & ts )
+{
+  return ts.tv_sec * BILLION + ts.tv_nsec;
+}
