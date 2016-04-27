@@ -5,12 +5,23 @@
 
 /* Congestion controller interface */
 
+typedef struct PacketData {
+  uint64_t send_time;
+  uint64_t receive_time;
+} PacketData;
+
 class Controller
 {
 private:
   bool debug_; /* Enables debugging output */
 
-  /* Add member variables here */
+  PacketData prev_packet_;
+  unsigned int send_rate_;
+
+  int compute_relative_iat_(PacketData packet1, PacketData packet2);
+
+  double send_rate_to_pacing_delay_(unsigned int send_rate);
+  unsigned int pacing_delay_to_send_rate_(double pacing_delay);
 
 public:
   /* Public interface for the congestion controller */

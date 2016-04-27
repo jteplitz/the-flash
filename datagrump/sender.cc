@@ -148,7 +148,6 @@ int DatagrumpSender::loop( void )
         uint64_t time_diff = get_time_diff();
         double send_rate = (double) controller_.send_rate() / pow(10, 9);
         pending_bits_ += time_diff * send_rate;
-        cout << send_rate << ", " << time_diff << "," << pending_bits_ << endl;
         while (pending_bits_ >= PACKET_SIZE) {
           send_datagram();
           pending_bits_ -= PACKET_SIZE;
