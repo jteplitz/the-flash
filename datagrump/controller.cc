@@ -4,11 +4,19 @@
 #include "controller.hh"
 #include "timestamp.hh"
 
+#define MIN_VEC_SIZE 10
+#define BANDWIDTH_WINDOW 70
+#define ALPHA 0.5
+
 using namespace std;
 
 /* Default constructor */
 Controller::Controller( const bool debug )
-  : debug_(debug), rtt_estimate(0), the_window_size(1.0), num_packets_received(0), first_of_burst(0), curr_interarrival(0), burst_count(1), burst_timer(0), slow_start(true), capacity_estimate(0.0), send_map(), rtt_total(0)
+  : debug_(debug), rtt_estimate(0), the_window_size(1.0), num_packets_received(0), first_of_burst(0), curr_interarrival(0), burst_count(1), burst_timer(0), slow_start(true), capacity_estimate(0.0), send_map(), rtt_total(0),
+  send_vector_(),
+  prev_rtt_(0),
+  rtt_diff_(0),
+  prev_time_received_(0)
 {
   debug_ = false;
 }
@@ -37,6 +45,7 @@ void Controller::datagram_was_sent( const uint64_t sequence_number,
   if (slow_start && send_map.find(sequence_number) == send_map.end()) {
     send_map.insert(pair<uint64_t, uint64_t>(sequence_number, 0));
   }
+  //update_bandwidth_estimate_(send_vector_, send_timestamp);
   if ( debug_ ) {
     cerr << "At time " << send_timestamp
 	 << " sent datagram " << sequence_number << endl;
@@ -70,6 +79,15 @@ void Controller::delay_aiad_unsmoothedRTT(const uint64_t sequence_number_acked,
   uint64_t newRoundTripTime = timestamp_ack_received - send_timestamp_acked;
   num_packets_received++;
   rtt_total += newRoundTripTime;
+  if (prev_rtt_ == 0) {
+    prev_rtt_ = newRoundTripTime;
+  } else {
+    auto delta = timestamp_ack_received - prev_time_received_;
+    if (delta != 0) {
+      _gradient(newRoundTripTime, prev_rtt_, rtt_diff_, delta);
+    }
+  }
+  prev_time_received_ = timestamp_ack_received;
   // unsigned int window_int = 70;
   // cerr << sequence_number_acked << " " << rtt_estimate << " " << window_size() << endl;
   if (num_packets_received == 1) {
@@ -82,7 +100,9 @@ void Controller::delay_aiad_unsmoothedRTT(const uint64_t sequence_number_acked,
     }
     rtt_estimate = newRoundTripTime;
   } else {
-    if (newRoundTripTime > 70) {
+    //if (newRoundTripTime > 70) {
+    cout << timestamp_ack_received << ',' << rtt_diff_ << endl;
+    if (rtt_diff_ > 0.5) {
       the_window_size -= 2.0/window_size();
     // cerr << newRoundTripTime << " " << rtt_estimate << " decrease" << endl;
     } else {
@@ -98,11 +118,11 @@ void Controller::delay_aiad_unsmoothedRTT(const uint64_t sequence_number_acked,
     } else {
       // cerr << burst_count << " packets with recv_timestamp_acked of " << recv_timestamp_acked << " with estimated rtt of " << rtt_estimate << endl;
       // cerr << sequence_number_acked << ": " << (burst_count * 1424 * 8)/ (130 * 1000) << endl;
-      
       the_window_size = 0.4 * the_window_size + 0.5 * burst_count;
       // cerr << burst_count << " " << window_size() << endl;
       // cerr << burst_count << " " << the_window_size << " " << rtt_estimate << endl;
       burst_count = 1;
+      rtt_diff_ = 0;
       first_of_burst = recv_timestamp_acked;
     }
   }
@@ -143,3 +163,48 @@ unsigned int Controller::timeout_ms( void )
 {
   return 150; /* timeout of one second */
 }
+void Controller::update_bandwidth_estimate_(vector<uint64_t> &vec, uint64_t time)
+{
+  vec.push_back(time);
+  if (vec.size() > MIN_VEC_SIZE) {
+    auto min_time = time - BANDWIDTH_WINDOW;
+    vector<uint64_t>::iterator i = vec.begin();
+    if (vec[0] < min_time ) {
+      for(; i != vec.end(); i++) {
+        if (*i >= min_time) {
+          break;
+        }
+      }
+    }
+    vec.erase(vec.begin(), i);
+  }
+}
+
+/**
+ * Returns the bandwidth estimate in packets per second.
+ */
+double Controller::get_bandwidth_estimate_(vector<uint64_t> &vec)
+{
+  auto start_time = vec[0];
+  auto end_time = vec[vec.size() - 1];
+  if (start_time == end_time) {
+    cerr << "Unable to estimate bandwidth " << vec.size() << endl;
+    return 150;
+  }
+  auto estimate = vec.size() / ((double) (end_time - start_time) / 1000.0);
+  return estimate;
+}
+
+double Controller::_gradient( const uint64_t curr, uint64_t &prev, double &diff,
+                              uint64_t delta)
+{
+  double new_diff = ((double) curr - (double) prev) / delta;
+  prev = curr;
+  if (diff != 0) {
+    diff = (1.0 - ALPHA) * diff + ALPHA * new_diff;
+  } else {
+    diff = new_diff;
+  }
+  return diff;
+}
+
