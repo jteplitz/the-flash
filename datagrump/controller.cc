@@ -3,13 +3,45 @@
 #include "controller.hh"
 #include "timestamp.hh"
 
+#define MTU 1500
+#define ESCAPE_LAMBDA 1
+#define SIGMA 200
+// Observe and update distributions each tick (20 ms)
+#define TICK 20
+// TICK expressed in seconds
+#define TAU 0.02
+
+
 using namespace std;
 
 /* Default constructor */
 Controller::Controller( const bool debug )
-  : debug_(debug), rtt_estimate(200), the_window_size(14), num_packets_received(0), rtt_total(0)
+  : debug_(debug), the_window_size(10.0), num_packets_received(0), num_packets_sent(0),
+    last_observed_timestamp(0), num_packets_tick_start(0), num_packets_tick_mutex(), startedThread(false)
 {
   debug_ = false;
+  std::default_random_engine generator;
+  std::uniform_int_distribution<int> distribution(0,1000);
+  std::set<unsigned int> usedLabels;
+  for (int i = 0; i < 256; i++) {
+    int label = distribution(generator);
+    while (usedLabels.find(label) != usedLabels.end()) {
+      label = distribution(generator);
+    }
+    usedLabels.insert(label);
+    lambdas[i].label = label;
+    lambdas[i].prob = 1.0/256;
+    lambdas[i].score = 1.0/256;
+  }
+  for (int i = 0; i < 256; i++) {
+    cout << lambdas[i].label << ", ";
+  }
+  cout << endl;
+  last_observed_timestamp = timestamp_ms();
+}
+
+unsigned int Controller::queue_occupancy_est( void ) {
+  return (num_packets_sent - num_packets_received) * MTU;
 }
 
 /* Get current window size, in datagrams */
@@ -23,7 +55,7 @@ unsigned int Controller::window_size( void )
 	 << " window size is " << the_window_size << endl;
   }
 
-  return the_window_size;
+  return the_window_size > 1 ? (int)the_window_size : 1;
 }
 
 /* A datagram was sent */
@@ -37,31 +69,81 @@ void Controller::datagram_was_sent( const uint64_t sequence_number,
     cerr << "At time " << send_timestamp
 	 << " sent datagram " << sequence_number << endl;
   }
+  num_packets_sent++;
+  if (!startedThread) {
+    startedThread = true;
+    std::thread updateThread(&Controller::update_tick, this);
+    updateThread.detach();
+  }
 }
 
-void Controller::delay_aiad_unsmoothedRTT( const uint64_t sequence_number_acked,
-             const uint64_t send_timestamp_acked,
-             const uint64_t timestamp_ack_received )
-{
-  uint64_t newRoundTripTime = timestamp_ack_received - send_timestamp_acked;
-  num_packets_received++;
-  rtt_total += newRoundTripTime;
-  bool firstPacket = num_packets_received == 1;
-  if (firstPacket) {
-    rtt_estimate = newRoundTripTime;
-  } else {
- 	  bool shouldChangeWindow = num_packets_received % (the_window_size < 16 ? 1 : the_window_size/16) == 0;
- 	  if (shouldChangeWindow) {
-      if (newRoundTripTime > rtt_estimate) {
-    		the_window_size = the_window_size <= 1 ? 1 : the_window_size - 1;
-      } else {
-      	the_window_size++;
-      }
- 	  }
-  	rtt_estimate = rtt_total / (float)num_packets_received;	
+int factorial(int someNumber) {
+  int curr = 1;
+  while (someNumber > 0) {
+    curr *= someNumber;
+    someNumber--;
   }
-  if ( debug_ ) {
-    cerr << endl << "The estimated rtt for datagram " << sequence_number_acked << " is " << newRoundTripTime << ". " << endl << "The new rtt estimate is " << rtt_estimate << "." << endl << endl;
+  return curr;
+}
+
+// static int sortByProb_asc(const void *one, const void *two) {
+//   lambdaEntry *lambdaOne = (lambdaEntry*)one;
+//   lambdaEntry *lambdaTwo = (lambdaEntry*)two;
+  
+//   if (lambdaTwo->prob == lambdaOne->prob){
+//     return 0;
+//   }
+//   else if (lambdaOne->prob < lambdaTwo->prob) {
+//     return -1;
+//   } 
+//   else {
+//     return 1;
+//   }
+// }
+
+static int sortByProb_desc(const void *one, const void *two) {
+  lambdaEntry *lambdaOne = (lambdaEntry*)one;
+  lambdaEntry *lambdaTwo = (lambdaEntry*)two;
+  if (lambdaTwo->prob == lambdaOne->prob){
+    return 0;
+  }
+  else if (lambdaTwo->prob > lambdaOne->prob) {
+    return 1;
+  } 
+  else {
+    return -1;
+  }
+}
+
+void Controller::update_tick() {
+  while (true) {
+    num_packets_tick_mutex.lock();
+    int numberOfPacketsInTick = num_packets_tick_start;
+    num_packets_tick_start = 0;
+    num_packets_tick_mutex.unlock();
+    uint64_t curr_time = timestamp_ms();
+    bool shouldUpdate = (curr_time - last_observed_timestamp >= TICK);
+    if (shouldUpdate) {
+      double sum = 0;
+      for (int i = 0; i < 256; i++) {
+        int labelTau = lambdas[i].label * TAU;
+        lambdas[i].score = lambdas[i].prob * (pow(labelTau, numberOfPacketsInTick) / factorial(numberOfPacketsInTick)) * exp(-labelTau);
+        sum += lambdas[i].score;
+      }
+      for (int i = 0; i < 256; i++) {
+        lambdas[i].prob = lambdas[i].score / sum;
+      }
+      cout << sizeof(lambdaEntry) << endl;
+      qsort(lambdas, 256, sizeof(lambdaEntry), sortByProb_desc);
+
+      // for (int i = 0; i < 256; i++) {
+      //   cout << "(" << lambdas[i].label << ", " << lambdas[i].prob << "), ";
+      // }
+      // cout << endl;
+      cout << "Number of packets in tick: " << numberOfPacketsInTick << ". Lambda with highest probability: " << lambdas[0].label << ". Probability: " << lambdas[0].prob << "." << endl;
+      last_observed_timestamp = timestamp_ms();
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
   }
 }
 
@@ -74,10 +156,12 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
 			       /* when the acknowledged datagram was received (receiver's clock)*/
 			       const uint64_t timestamp_ack_received )
                                /* when the ack was received (by sender) */
-{
+{ 
   /* Default: take no action */
-  delay_aiad_unsmoothedRTT(sequence_number_acked, send_timestamp_acked, timestamp_ack_received);
-  
+  num_packets_received++;
+  num_packets_tick_mutex.lock();
+  num_packets_tick_start++;
+  num_packets_tick_mutex.unlock();
 
   if ( debug_ ) {
     cerr << "At time " << timestamp_ack_received
@@ -86,11 +170,12 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
 	 << ", received @ time " << recv_timestamp_acked << " by receiver's clock)"
 	 << endl;
   }
+
 }
 
 /* How long to wait (in milliseconds) if there are no acks
    before sending one more datagram */
 unsigned int Controller::timeout_ms( void )
 {
-  return rtt_estimate; /* timeout of one second */
+  return 200; /* timeout of one second */
 }

@@ -1,24 +1,35 @@
 #ifndef CONTROLLER_HH
 #define CONTROLLER_HH
 
-#include <cstdint>
-#include <map>
+#include <stdio.h>
+#include <stdlib.h>
+#include <random>
+#include <set>
+#include <cmath>
+#include <thread>
+#include <mutex>
+#include <chrono>
 
+
+typedef struct lambdaEntry {
+  unsigned int label;
+  double prob;
+  double score;
+} lambdaEntry;
 /* Congestion controller interface */
 
 class Controller
 {
 private:
   bool debug_; /* Enables debugging output */
-  unsigned int rtt_estimate;
-  unsigned int the_window_size;
+  double the_window_size;
   uint64_t num_packets_received;
-  uint64_t rtt_total;
-
-  /* Add member variables here */
-  void delay_aiad_unsmoothedRTT( const uint64_t sequence_number_acked,
-             const uint64_t send_timestamp_acked,
-             const uint64_t timestamp_ack_received );
+  uint64_t num_packets_sent;
+  lambdaEntry lambdas[256];
+  uint64_t last_observed_timestamp;
+  uint64_t num_packets_tick_start;
+  std::mutex num_packets_tick_mutex;
+  bool startedThread;
 
 public:
   /* Public interface for the congestion controller */
@@ -44,6 +55,10 @@ public:
   /* How long to wait (in milliseconds) if there are no acks
      before sending one more datagram */
   unsigned int timeout_ms( void );
+
+  void update_tick( void );
+
+  unsigned int queue_occupancy_est( void );
 };
 
 #endif
