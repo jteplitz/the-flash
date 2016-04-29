@@ -16,8 +16,8 @@ using namespace std;
 
 /* Default constructor */
 Controller::Controller( const bool debug )
-  : debug_(debug), the_window_size(10.0), num_packets_received(0), num_packets_sent(0),
-    last_observed_timestamp(0), num_packets_tick_start(0), num_packets_tick_mutex(), startedThread(false)
+  : debug_(debug), the_window_size(1.0), num_packets_received(0), num_packets_sent(0),
+    num_packets_tick_start(0), num_packets_tick_mutex(), startedThread(false)
 {
   debug_ = false;
   std::default_random_engine generator;
@@ -37,11 +37,10 @@ Controller::Controller( const bool debug )
     cout << lambdas[i].label << ", ";
   }
   cout << endl;
-  last_observed_timestamp = timestamp_ms();
 }
 
 unsigned int Controller::queue_occupancy_est( void ) {
-  return (num_packets_sent - num_packets_received) * MTU;
+  return num_packets_sent - num_packets_received;
 }
 
 /* Get current window size, in datagrams */
@@ -121,29 +120,37 @@ void Controller::update_tick() {
     int numberOfPacketsInTick = num_packets_tick_start;
     num_packets_tick_start = 0;
     num_packets_tick_mutex.unlock();
-    uint64_t curr_time = timestamp_ms();
-    bool shouldUpdate = (curr_time - last_observed_timestamp >= TICK);
-    if (shouldUpdate) {
-      double sum = 0;
-      for (int i = 0; i < 256; i++) {
-        int labelTau = lambdas[i].label * TAU;
-        lambdas[i].score = lambdas[i].prob * (pow(labelTau, numberOfPacketsInTick) / factorial(numberOfPacketsInTick)) * exp(-labelTau);
-        sum += lambdas[i].score;
-      }
-      for (int i = 0; i < 256; i++) {
-        lambdas[i].prob = lambdas[i].score / sum;
-      }
-      cout << sizeof(lambdaEntry) << endl;
-      qsort(lambdas, 256, sizeof(lambdaEntry), sortByProb_desc);
-
-      // for (int i = 0; i < 256; i++) {
-      //   cout << "(" << lambdas[i].label << ", " << lambdas[i].prob << "), ";
+    std::default_random_engine generator;
+    double sum = 0;
+    for (int i = 0; i < 256; i++) {
+      // if (lambdas[i].label > 0) {
+      //   std::normal_distribution<double> distribution(lambdas[i].label, 200 * sqrt(TAU));
+      //   lambdas[i].label = distribution(generator);
+      //   if (lambdas[i].label <= 1) {
+      //     lambdas[i].label = 1;
+      //   }
+      //   if (lambdas[i].label > 1000) {
+      //     lambdas[i].label = 1000;
+      //   }
       // }
-      // cout << endl;
-      cout << "Number of packets in tick: " << numberOfPacketsInTick << ". Lambda with highest probability: " << lambdas[0].label << ". Probability: " << lambdas[0].prob << "." << endl;
-      last_observed_timestamp = timestamp_ms();
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      int labelTau = lambdas[i].label * TAU;
+      lambdas[i].score = lambdas[i].prob * (pow(labelTau, numberOfPacketsInTick) / factorial(numberOfPacketsInTick)) * exp(-labelTau);
+      sum += lambdas[i].score;
     }
+    for (int i = 0; i < 256; i++) {
+      lambdas[i].prob = lambdas[i].score / sum;
+    }
+    qsort(lambdas, 256, sizeof(lambdaEntry), sortByProb_desc);
+    for (int i = 0; i < 256; i++) {
+      if (lambdas[i].prob != lambdas[i].prob) {
+        exit(0);
+      }
+      cout << i << ": (" << lambdas[i].label << ", " << lambdas[i].prob << ")" << endl;
+    }
+    cout << endl << endl;
+    cout << "Number of packets in tick: " << numberOfPacketsInTick << ". Lambda with highest probability: " << lambdas[0].label << ". Probability: " << lambdas[0].prob << ". Queue occupancy at " << queue_occupancy_est() << "." << endl;
+    // the_window_size = ((lambdas[0].label / 10.0) - queue_occupancy_est());
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
 }
 

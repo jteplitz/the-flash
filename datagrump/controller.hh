@@ -12,7 +12,7 @@
 
 
 typedef struct lambdaEntry {
-  unsigned int label;
+  int label;
   double prob;
   double score;
 } lambdaEntry;
@@ -26,7 +26,6 @@ private:
   uint64_t num_packets_received;
   uint64_t num_packets_sent;
   lambdaEntry lambdas[256];
-  uint64_t last_observed_timestamp;
   uint64_t num_packets_tick_start;
   std::mutex num_packets_tick_mutex;
   bool startedThread;
