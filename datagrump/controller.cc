@@ -1,4 +1,7 @@
 #include <iostream>
+#include <thread>
+#include <chrono>
+#include <cmath>
 
 #include "controller.hh"
 #include "timestamp.hh"
@@ -11,8 +14,16 @@
 #define BURST_TIME 5
 
 // over/underuse change threshold
-#define THRESHOLD 0.5
+#define THRESHOLD 0.2
 //#define OVERUSE_TIME 10
+// Tick time in milliseconds
+#define TICK_TIME 20
+
+// Maximum multiplicative increase in bit rate per second
+#define MAX_INCREASE_RATE 1.8
+#define MULT_DECREASE_RATE 0.85
+// Bandwidth estimator window in milliseconds
+#define BANDWIDTH_WINDOW 500
 
 using namespace std;
 
@@ -25,8 +36,56 @@ Controller::Controller( const bool debug )
     curr_gradient_(0),
     prev_rtt_(0),
     prev_measured_time_(0),
-    congestion_state_(Underuse)
-{}
+    congestion_signal_ (Underuse),
+    state_ (Increase),
+    rate_control_thread_(&Controller::update_rate, this),
+    last_tick_(0),
+    arrival_times_(),
+    curr_window_size_(1.0)
+{
+}
+
+void Controller::update_rate( void )
+{
+  while(true) {
+    auto curr_time = timestamp_ms();
+    update_state_();
+    if (state_ == Increase) {
+      double change_rate = pow(MAX_INCREASE_RATE, min((curr_time - last_tick_) / 1000.0, 1.0));
+      send_rate_ *= change_rate;
+      cout << "Increasing by " << change_rate << endl;
+    } else if (state_ == Decrease) {
+      send_rate_ = curr_bandwidth_estimate_() * MULT_DECREASE_RATE;
+      cout << "Decreasing" << endl;
+    }
+
+    last_tick_ = curr_time;
+
+    chrono::duration<int, std::milli> timespan(TICK_TIME);
+    this_thread::sleep_for(timespan);
+  }
+}
+
+void Controller::update_state_( void )
+{
+  if (congestion_signal_ == Underuse) {
+    if (state_ == Increase || state_ == Decrease) {
+      state_ = Hold;
+    } else {
+      state_ = Increase;
+    }
+  } else if (congestion_signal_ == Normal) {
+    if (state_ == Hold) {
+      state_ = Increase;
+    } else if (state_ == Decrease) {
+      state_ = Hold;
+    }
+  } else if (congestion_signal_ == Overuse) {
+    if (state_ == Increase || state_ == Hold){
+      state_ = Decrease;
+    }
+  }
+}
 
 /* Get current window size, in datagrams */
 unsigned int Controller::window_size( void )
@@ -39,7 +98,7 @@ unsigned int Controller::window_size( void )
 	 << " window size is " << the_window_size << endl;
   }
 
-  return the_window_size;
+  return ;
 }
 
 /* A datagram was sent */
@@ -73,6 +132,7 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
     prev_packet_ = curr_packet;
     prev_measured_time_ = timestamp_ack_received;
     prev_rtt_ = rtt;
+    update_bandwidth_estimate_(recv_timestamp_acked);
     return;
   }
 
@@ -80,6 +140,7 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
   auto iat = curr_packet.receive_time - prev_packet_.receive_time;
   if (iat < BURST_TIME && relative_iat < 0) {
     prev_packet_ = curr_packet;
+    update_bandwidth_estimate_(recv_timestamp_acked);
     return;
   }
 
@@ -88,13 +149,15 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
   } else {
     cerr << "Huge IAT!!" << endl;
     prev_packet_ = curr_packet;
-    // TODO: Trigger overuse?
+    congestion_signal_ = Underuse;
+    update_bandwidth_estimate_(recv_timestamp_acked);
     return;
   }
 
   auto delta = timestamp_ack_received - prev_measured_time_;
   if (delta == 0) {
     prev_packet_ = curr_packet;
+    update_bandwidth_estimate_(recv_timestamp_acked);
     return;
   }
   auto gradient = gradient_(rtt, prev_rtt_, curr_gradient_, delta);
@@ -103,13 +166,13 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
 
   if (gradient > THRESHOLD) {
     // TODO: Fancier triggering of overuse?
-    congestion_state_ = Overuse;
+    congestion_signal_ = Overuse;
     cout << -1;
   } else if (gradient < -1 * THRESHOLD){
-    congestion_state_ = Underuse;
+    congestion_signal_ = Underuse;
     cout << 1;
   } else {
-    congestion_state_ = Normal;
+    congestion_signal_ = Normal;
     cout << 0;
   }
 
@@ -119,6 +182,8 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
   prev_measured_time_ = timestamp_ack_received;
 
   packet_send_rates_.erase(sequence_number_acked);
+
+  update_bandwidth_estimate_(recv_timestamp_acked);
   if ( debug_ ) {
     cerr << "At time " << timestamp_ack_received
 	 << " received ack for datagram " << sequence_number_acked
@@ -128,20 +193,27 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
   }
 }
 
-double Controller::send_rate_to_pacing_delay_(unsigned int send_rate)
+void Controller::update_bandwidth_estimate_(uint64_t recv_time)
 {
-  if (send_rate == 0){
-    return 0;
+  arrival_times_.push_back(recv_time);
+  uint64_t min_time = recv_time - BANDWIDTH_WINDOW;
+  vector<uint64_t>::iterator i = arrival_times_.begin();
+  for(; i != arrival_times_.end(); i++) {
+    if (*i >= min_time) {
+      break;
+    }
   }
-  double packet_send_rate = (double) send_rate / PACKET_LENGTH;
-  return 1 / packet_send_rate;
-}
-unsigned int Controller::pacing_delay_to_send_rate_(double pacing_delay)
-{
-  double packet_send_rate = 1 / pacing_delay;
-  return packet_send_rate * PACKET_LENGTH;
+  arrival_times_.erase(arrival_times_.begin(), i);
 }
 
+uint64_t Controller::curr_bandwidth_estimate_(void) {
+  auto start_time = arrival_times_[0];
+  auto end_time = arrival_times_[arrival_times_.size() - 1];
+  auto bandwidth_estimate = (PACKET_LENGTH * arrival_times_.size()) / (end_time - start_time);
+  bandwidth_estimate *= 1000;
+  cout << "Bandwidth estimate " << bandwidth_estimate << endl;
+  return bandwidth_estimate;
+}
 
 int Controller::compute_relative_iat_(PacketData packet1, PacketData packet2)
 {
@@ -173,6 +245,6 @@ unsigned int Controller::timeout_ms( void )
 unsigned int Controller::send_rate( void )
 {
   // computed send rate or 10 packets per second
-  //return max((uint64_t) send_rate_, (uint64_t) PACKET_LENGTH * 10);
-  return 4000000;
+  return max((uint64_t) send_rate_, (uint64_t) PACKET_LENGTH * 10);
+  //return 4000000;
 }

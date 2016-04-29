@@ -145,17 +145,21 @@ int DatagrumpSender::loop( void )
      sending more datagrams */
   poller.add_action( Action( socket_, Direction::Out, [&] () {
 	/* Close the window */
-        uint64_t time_diff = get_time_diff();
+        /*uint64_t time_diff = get_time_diff();
         double send_rate = (double) controller_.send_rate() / pow(10, 9);
         pending_bits_ += time_diff * send_rate;
         while (pending_bits_ >= PACKET_SIZE) {
           send_datagram();
           pending_bits_ -= PACKET_SIZE;
         }
-	return ResultType::Continue;
+	return ResultType::Continue;*/
+        while (window_is_open()) {
+          send_datagram();
+        }
+        return ResultType::Continue;
       },
       /* We're only interested in this rule when the window is open */
-      [&] () { return true; } ) );
+      [&] () { return window_is_open(); } ) );
 
   /* second rule: if sender receives an ack,
      process it and inform the controller
