@@ -2,6 +2,7 @@
 #define CONTROLLER_HH
 
 #include <cstdint>
+#include <vector>
 
 /* Congestion controller interface */
 
@@ -9,6 +10,19 @@ class Controller
 {
 private:
   bool debug_; /* Enables debugging output */
+  std::vector<uint64_t> receive_packets_;
+  std::vector<uint64_t> send_packets_;
+  double curr_window_;
+  double prev_bandwidth_;
+  double bandwidth_diff_;
+  double prev_ack_time_;
+  int mult_decrease_counter;
+
+  void update_bandwidth_estimate_(std::vector<uint64_t> &vec, uint64_t time);
+  double get_bandwidth_estimate_(std::vector<uint64_t> &vec);
+  void update_window_(const double bandwidth_gradient);
+  double gradient_( const double curr, double &prev, double &diff,
+                          uint64_t delta);
 
   /* Add member variables here */
 
