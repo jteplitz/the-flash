@@ -19,3 +19,4 @@ Makefile.in
 /compile
 /datagrump/sender
 /datagrump/receiver
+/datagrump/.DS_Store
