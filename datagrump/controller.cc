@@ -7,7 +7,7 @@ using namespace std;
 
 /* Default constructor */
 Controller::Controller( const bool debug )
-  : debug_(debug), rtt_estimate(200), the_window_size(14), num_packets_received(0), rtt_total(0)
+  : debug_(debug), the_window_size(1)
 {
   debug_ = false;
 }
@@ -20,71 +20,56 @@ unsigned int Controller::window_size( void )
 
   if ( debug_ ) {
     cerr << "At time " << timestamp_ms()
-	 << " window size is " << the_window_size << endl;
+   << " window size is " << the_window_size << endl;
   }
 
-  return the_window_size;
+  return the_window_size < 1 ? 1 : (int)the_window_size;
 }
 
 /* A datagram was sent */
 void Controller::datagram_was_sent( const uint64_t sequence_number,
-				    /* of the sent datagram */
-				    const uint64_t send_timestamp )
+            /* of the sent datagram */
+            const uint64_t send_timestamp )
                                     /* in milliseconds */
 {
   /* Default: take no action */
   if ( debug_ ) {
     cerr << "At time " << send_timestamp
-	 << " sent datagram " << sequence_number << endl;
+   << " sent datagram " << sequence_number << endl;
   }
 }
 
-void Controller::delay_aiad_unsmoothedRTT( const uint64_t sequence_number_acked,
-             const uint64_t send_timestamp_acked,
+void Controller::delay_aiad_unsmoothedRTT(const uint64_t send_timestamp_acked,
              const uint64_t timestamp_ack_received )
 {
   uint64_t newRoundTripTime = timestamp_ack_received - send_timestamp_acked;
-  num_packets_received++;
-  rtt_total += newRoundTripTime;
-  bool firstPacket = num_packets_received == 1;
-  if (firstPacket) {
-    rtt_estimate = newRoundTripTime;
+  if (newRoundTripTime > 70) {
+    the_window_size -= 4.0/window_size();
   } else {
- 	  bool shouldChangeWindow = num_packets_received % (the_window_size < 16 ? 1 : the_window_size/16) == 0;
- 	  if (shouldChangeWindow) {
-      if (newRoundTripTime > rtt_estimate) {
-    		the_window_size = the_window_size <= 1 ? 1 : the_window_size - 1;
-      } else {
-      	the_window_size++;
-      }
- 	  }
-  	rtt_estimate = rtt_total / (float)num_packets_received;	
-  }
-  if ( debug_ ) {
-    cerr << endl << "The estimated rtt for datagram " << sequence_number_acked << " is " << newRoundTripTime << ". " << endl << "The new rtt estimate is " << rtt_estimate << "." << endl << endl;
+    the_window_size += 1.0/window_size();
   }
 }
 
 /* An ack was received */
 void Controller::ack_received( const uint64_t sequence_number_acked,
-			       /* what sequence number was acknowledged */
-			       const uint64_t send_timestamp_acked,
-			       /* when the acknowledged datagram was sent (sender's clock) */
-			       const uint64_t recv_timestamp_acked,
-			       /* when the acknowledged datagram was received (receiver's clock)*/
-			       const uint64_t timestamp_ack_received )
+             /* what sequence number was acknowledged */
+             const uint64_t send_timestamp_acked,
+             /* when the acknowledged datagram was sent (sender's clock) */
+             const uint64_t recv_timestamp_acked,
+             /* when the acknowledged datagram was received (receiver's clock)*/
+             const uint64_t timestamp_ack_received )
                                /* when the ack was received (by sender) */
 {
   /* Default: take no action */
-  delay_aiad_unsmoothedRTT(sequence_number_acked, send_timestamp_acked, timestamp_ack_received);
+  delay_aiad_unsmoothedRTT(send_timestamp_acked, timestamp_ack_received);
   
 
   if ( debug_ ) {
     cerr << "At time " << timestamp_ack_received
-	 << " received ack for datagram " << sequence_number_acked
-	 << " (send @ time " << send_timestamp_acked
-	 << ", received @ time " << recv_timestamp_acked << " by receiver's clock)"
-	 << endl;
+   << " received ack for datagram " << sequence_number_acked
+   << " (send @ time " << send_timestamp_acked
+   << ", received @ time " << recv_timestamp_acked << " by receiver's clock)"
+   << endl;
   }
 }
 
@@ -92,5 +77,5 @@ void Controller::ack_received( const uint64_t sequence_number_acked,
    before sending one more datagram */
 unsigned int Controller::timeout_ms( void )
 {
-  return rtt_estimate; /* timeout of one second */
+  return 200; /* timeout of one second */
 }

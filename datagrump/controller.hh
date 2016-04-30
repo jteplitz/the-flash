@@ -10,14 +10,10 @@ class Controller
 {
 private:
   bool debug_; /* Enables debugging output */
-  unsigned int rtt_estimate;
-  unsigned int the_window_size;
-  uint64_t num_packets_received;
-  uint64_t rtt_total;
+  float the_window_size;
 
   /* Add member variables here */
-  void delay_aiad_unsmoothedRTT( const uint64_t sequence_number_acked,
-             const uint64_t send_timestamp_acked,
+  void delay_aiad_unsmoothedRTT(const uint64_t send_timestamp_acked,
              const uint64_t timestamp_ack_received );
 
 public:
@@ -33,13 +29,13 @@ public:
 
   /* A datagram was sent */
   void datagram_was_sent( const uint64_t sequence_number,
-			  const uint64_t send_timestamp );
+        const uint64_t send_timestamp );
 
   /* An ack was received */
   void ack_received( const uint64_t sequence_number_acked,
-		     const uint64_t send_timestamp_acked,
-		     const uint64_t recv_timestamp_acked,
-		     const uint64_t timestamp_ack_received );
+         const uint64_t send_timestamp_acked,
+         const uint64_t recv_timestamp_acked,
+         const uint64_t timestamp_ack_received );
 
   /* How long to wait (in milliseconds) if there are no acks
      before sending one more datagram */
